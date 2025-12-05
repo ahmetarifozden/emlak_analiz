@@ -32,6 +32,8 @@ def run_for_location(city: str, district: str, limit: int = 10) -> Tuple[pd.Data
     - Detay DataFrame + özet DataFrame döner
     """
 
+
+
     sites = [
     #("Hepsiemlak", HepsiemlakScraper(), hepsiemlak_url(city, district)),
     ("Emlakjet", EmlakjetScraper(), emlakjet_url(city, district)),
