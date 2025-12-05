@@ -1,8 +1,18 @@
 import re
+import random
 import requests
 from bs4 import BeautifulSoup
-from typing import List
+from typing import List, Optional
 from .base import BaseScraper, Listing
+
+# Gerçek tarayıcı gibi görünmek için header
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+}
 
 
 class EmlakjetScraper(BaseScraper):
@@ -10,86 +20,132 @@ class EmlakjetScraper(BaseScraper):
 
     def _page_url(self, base_url: str, page: int) -> str:
         """
-        Emlakjet'te 2. sayfanın URL'sine bak:
-        Örneğin:
-          1. sayfa: https://www.emlakjet.com/satilik-konut/adana-ceyhan
-          2. sayfa: https://www.emlakjet.com/satilik-konut/adana-ceyhan?page=2
-        ise bu fonksiyon doğrudur.
-        Farklıysa sadece burayı değiştirmen yeter.
+        1. sayfa: https://www.emlakjet.com/satilik-konut/adana-seyhan
+        2. sayfa: https://www.emlakjet.com/satilik-konut/adana-seyhan?sayfa=2
         """
         if page == 1:
             return base_url
         return f"{base_url}?sayfa={page}"
 
-    def fetch_listings(self, search_url: str, limit: int = 10) -> List[Listing]:
-        print(f"[{self.site_name}] {search_url} adresinden veri çekiliyor...")
+    def _extract_total_count(self, soup: BeautifulSoup) -> Optional[int]:
+        """
+        Sayfa içindeki metinden toplam ilan sayısını çekmeye çalışır.
+        Örn: '1.234 adet ilan bulundu' gibi bir yazı varsa onu yakalar.
+        """
+        text = soup.get_text(" ", strip=True)
 
-        headers = {
-            "User-Agent":
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "tr-TR,tr;q=0.9",
-            "Referer": "https://www.google.com/",
-        }
+        m = re.search(r"([\d\.]+)\s+adet\s+ilan\b", text, flags=re.IGNORECASE)
+        if not m:
+            return None
 
-        listings: List[Listing] = []
+        raw_num = m.group(1)
+        digits = re.sub(r"[^\d]", "", raw_num)
+        if not digits:
+            return None
+        return int(digits)
+
+    def fetch_listings(self, base_url: str, limit: int = 50, max_pages: int = 50) -> List[Listing]:
+        """
+        - Verilen arama URL’si için TÜM sayfalardaki ilanları gezer
+        - /ilan/ içeren linklerden ilanları toplar
+        - EN SON, tüm bu ilanlar arasından rastgele `limit` kadarını seçip döner.
+
+        Yani:
+        1) Tüm sayfalardan full ilan listesi (listings_all)
+        2) random.sample(listings_all, limit) ile rastgele seçim
+        """
+
+        listings_all: List[Listing] = []
+        seen_urls = set()
         page = 1
+        total_from_site_printed = False  # toplam ilan sayısını sadece 1 kez basalım
 
-        while len(listings) < limit:
-            page_url = self._page_url(search_url, page)
-            print(f"[emlakjet] Sayfa {page} URL: {page_url}")
+        while page <= max_pages:
+            url = self._page_url(base_url, page)
+            resp = requests.get(url, headers=HEADERS, timeout=20)
 
-            resp = requests.get(page_url, headers=headers, timeout=15)
-            resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            cards = soup.select("div.listing-item")
-
-            print(f"[emlakjet] Sayfa {page} içindeki kart sayısı: {len(cards)}")
-
-            if not cards:
-                # Bu sayfada hiç kart yoksa -> daha ileri sayfaya gitmenin anlamı yok
+            if resp.status_code != 200:
+                print(f"[emlakjet] {url} için status code: {resp.status_code}")
                 break
 
-            for card in cards:
-                if len(listings) >= limit:
-                    break
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-                try:
-                    title_tag = card.select_one("h3.listing-title")
-                    title = title_tag.get_text(strip=True) if title_tag else "Başlık yok"
+            # İlk sayfada toplam ilan sayısını okumayı dene
+            if page == 1 and not total_from_site_printed:
+                total = self._extract_total_count(soup)
+                if total is not None:
+                    print(f"[emlakjet] Bu arama için sitede görünen TOPLAM ilan sayısı: {total}")
+                else:
+                    print("[emlakjet] Toplam ilan sayısı metinden okunamadı.")
+                total_from_site_printed = True
 
-                    price_tag = card.select_one("div.listing-price")
-                    if not price_tag:
-                        continue
+            # href içinde /ilan/ geçen tüm linkler
+            card_links = soup.find_all("a", href=re.compile(r"/ilan/"))
+            if not card_links:
+                print(f"[emlakjet] {url} sayfasında ilan linki bulunamadı. Muhtemelen son sayfa.")
+                break
 
-                    price_text = price_tag.get_text(strip=True)
-                    price_num = float(re.sub(r"[^\d]", "", price_text))
+            page_new_count = 0
 
-                    link_tag = card.select_one("a")
-                    if link_tag and link_tag.get("href"):
-                        href = link_tag["href"]
-                        if href.startswith("http"):
-                            url = href
-                        else:
-                            url = "https://www.emlakjet.com" + href
-                    else:
-                        url = search_url
-
-                    listings.append(
-                        Listing(
-                            title=title,
-                            price=price_num,
-                            url=url,
-                            site=self.site_name,
-                        )
-                    )
-                except Exception as e:
-                    print(f"[emlakjet] kart hata: {e}")
+            for a in card_links:
+                href = a.get("href")
+                if not href:
                     continue
 
-            page += 1  # bir sonraki sayfaya geç
+                # Tam URL yap
+                if href.startswith("http"):
+                    full_url = href
+                else:
+                    full_url = "https://www.emlakjet.com" + href
 
-        print(f"[emlakjet] Toplam {len(listings)} ilan alındı.")
-        return listings
+                if full_url in seen_urls:
+                    continue
+                seen_urls.add(full_url)
+
+                # Link içindeki tüm yazıyı al
+                text = " ".join(a.stripped_strings)
+                if not text:
+                    continue
+
+                # Metinden fiyatı çek (örn: 8.750.000 TL)
+                price_matches = re.findall(r"([\d\.]+)\s*TL", text)
+                if not price_matches:
+                    continue
+
+                # Genelde son TL ifadesi gerçek fiyat
+                price_str = price_matches[-1]
+                digits = re.sub(r"[^\d]", "", price_str)
+                if not digits:
+                    continue
+
+                price = int(digits)
+
+                # Başlığı, fiyat kısmından önceki kısım olarak al
+                price_pos = text.rfind(price_str)
+                title = text[:price_pos].strip()
+
+                listings_all.append(
+                    Listing(
+                        site=self.site_name,
+                        title=title,
+                        price=price,
+                        url=full_url,
+                    )
+                )
+                page_new_count += 1
+
+            print(f"[emlakjet] {url} sayfasından {page_new_count} yeni ilan eklendi. "
+                  f"Şu ana kadar TOPLAM {len(listings_all)} ilan toplandı.")
+
+            page += 1  # sıradaki sayfaya geç
+
+        if not listings_all:
+            print("[emlakjet] Hiç ilan toplanamadı.")
+            return []
+
+        # Rastgele seçim
+        sample_count = min(limit, len(listings_all))
+        sampled_listings = random.sample(listings_all, sample_count)
+
+        print(f"[emlakjet] Toplam {len(listings_all)} ilandan rastgele {sample_count} tanesi seçildi.")
+        return sampled_listings
