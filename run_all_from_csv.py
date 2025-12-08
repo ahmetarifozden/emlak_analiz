@@ -4,7 +4,7 @@ import pandas as pd
 from main import run_for_location
 
 CSV_PATH = "il_ilce.csv"     # senin dosyan
-EXCEL_PATH = "emlak_ozet_turkiye.xlsx"
+EXCEL_PATH = "emlak_ozet_turkiye_hepsiemlak.xlsx"
 LIMIT_PER_SITE = 10
 
 
@@ -37,7 +37,7 @@ def main():
         all_summaries.append(summary_df)
 
         # Siteleri yormamak için bekleme koy
-        time.sleep(2)
+        time.sleep(3)
 
     # Tüm özetleri birleştir
     if not all_summaries:

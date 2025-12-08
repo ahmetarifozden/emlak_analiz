@@ -3,8 +3,8 @@ import pandas as pd
 # ===========================
 #  AYARLAR
 # ===========================
-INPUT_FILE = "ilanlar_emlakjet.xlsx"
-OUTPUT_FILE = "sehir_bazli_anomaliler.xlsx"
+INPUT_FILE = "emlak_ozet_turkiye.xlsx"
+OUTPUT_FILE = "sehir_bazli_anomaliler_2.xlsx"
 
 COL_CITY = "city"
 COL_SITE = "site"
